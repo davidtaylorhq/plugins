@@ -3,116 +3,100 @@ import { Worker } from 'worker_threads';
 import os from 'os';
 
 class WorkerPool {
+  workers = [];
+  availableWorkers = [];
+
+  pendingTasks = [];
+  runningTasks = new Map();
+
+  nextTaskId = 0;
+
   constructor(workerScript, poolSize = os.cpus().length) {
     this.workerScript = workerScript;
     this.poolSize = poolSize;
-    this.workers = [];
-    this.availableWorkers = [];
-    this.taskQueue = [];
-    this.nextTaskId = 0;
-    this.pendingTasks = new Map();
-    this.isTerminating = false;
   }
 
-  initialize() {
-    if (this.workers.length > 0) {
-      return;
-    }
+  createWorker() {
+    const worker = new Worker(this.workerScript);
 
-    for (let i = 0; i < this.poolSize; i++) {
-      const worker = new Worker(this.workerScript);
+    worker.on('message', (message) => {
+      const { result, error } = message;
+      const runningTask = this.runningTasks.get(worker);
 
-      worker.on('message', (message) => {
-        const { id, result, error } = message;
-        const pendingTask = this.pendingTasks.get(id);
+      if (runningTask) {
+        this.runningTasks.delete(worker);
 
-        if (pendingTask) {
-          this.pendingTasks.delete(id);
-
-          if (error) {
-            const err = new Error(error.message);
-            err.name = error.name;
-            err.stack = error.stack;
-            pendingTask.reject(err);
-          } else {
-            pendingTask.resolve(result);
-          }
-
-          // Worker is now available for the next task
-          this.availableWorkers.push(worker);
-          this.processQueue();
+        if (error) {
+          const err = new Error(error.message);
+          err.name = error.name;
+          err.stack = error.stack;
+          runningTask.reject(err);
+        } else {
+          runningTask.resolve(result);
         }
-      });
 
-      worker.on('error', (error) => {
-        // Handle worker errors
-        console.error('Worker error:', error);
-      });
+        this.availableWorkers.push(worker);
+        this.processQueue();
+      }
+    });
 
-      worker.on('exit', (code) => {
-        if (code !== 0 && !this.isTerminating) {
-          console.error(`Worker stopped with exit code ${code}`);
-        }
-      });
+    worker.on('error', (error) => {
+      console.error('Worker error:', error);
+    });
 
-      this.workers.push(worker);
-      this.availableWorkers.push(worker);
+    this.workers.push(worker);
+    return worker;
+  }
+
+  getAvailableWorker() {
+    if (this.availableWorkers.length > 0) {
+      return this.availableWorkers.shift();
     }
+    if (this.workers.length < this.poolSize) {
+      return this.createWorker();
+    }
+    return null;
   }
 
   processQueue() {
-    while (this.taskQueue.length > 0 && this.availableWorkers.length > 0) {
-      const task = this.taskQueue.shift();
-      const worker = this.availableWorkers.shift();
+    while (this.pendingTasks.length > 0) {
+      const worker = this.getAvailableWorker();
+      if (!worker) break;
+
+      const task = this.pendingTasks.shift();
+
+      this.runningTasks.set(worker, task);
 
       worker.postMessage({
-        id: task.id,
         inputCode: task.inputCode,
         babelOptions: task.babelOptions
       });
     }
   }
 
-  runTask(inputCode, babelOptions) {
-    this.initialize();
-
-    return new Promise((resolve, reject) => {
-      const taskId = this.nextTaskId++;
-
-      this.pendingTasks.set(taskId, { resolve, reject });
-
-      const task = {
-        id: taskId,
+  async runTask(inputCode, babelOptions) {
+    const taskPromise = new Promise((resolve, reject) => {
+      this.pendingTasks.push({
+        resolve,
+        reject,
         inputCode,
         babelOptions
-      };
-
-      if (this.availableWorkers.length > 0) {
-        const worker = this.availableWorkers.shift();
-        worker.postMessage({
-          id: task.id,
-          inputCode: task.inputCode,
-          babelOptions: task.babelOptions
-        });
-      } else {
-        this.taskQueue.push(task);
-      }
+      });
     });
+
+    this.processQueue();
+
+    return taskPromise;
   }
 
   async terminate() {
-    this.isTerminating = true;
-
     // Reject all pending tasks
-    for (const [id, { reject }] of this.pendingTasks.entries()) {
+    for (const [, { reject }] of this.runningTasks.entries()) {
       reject(new Error('Worker pool is terminating'));
     }
-    this.pendingTasks.clear();
+    this.runningTasks.clear();
+    this.pendingTasks.length = 0;
 
-    // Clear the task queue
-    this.taskQueue = [];
-
-    // Terminate all workers
     const terminatePromises = this.workers.map((worker) =>
       worker.terminate().catch((err) => {
         console.error('Error terminating worker:', err);
@@ -121,12 +105,11 @@ class WorkerPool {
 
     await Promise.all(terminatePromises);
 
-    this.workers = [];
-    this.availableWorkers = [];
+    this.workers.length = 0;
+    this.availableWorkers.length = 0;
   }
 }
 
-// Create a singleton worker pool instance
 let pool = null;
 
 export function getWorkerPool() {
