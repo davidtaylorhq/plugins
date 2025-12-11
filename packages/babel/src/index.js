@@ -1,5 +1,3 @@
-import { isMainThread } from 'worker_threads';
-
 import * as babel from '@babel/core';
 import { createFilter } from '@rollup/pluginutils';
 
@@ -9,7 +7,6 @@ import preflightCheck from './preflightCheck.js';
 import transformCode, { transformParallel } from './transformCode.js';
 import { addBabelPlugin, escapeRegExpCharacters, warnOnce, stripQuery } from './utils.js';
 import { terminateWorkerPool } from './workerPool.js';
-import startWorker from './worker.js';
 
 const unpackOptions = ({
   extensions = babel.DEFAULT_EXTENSIONS,
@@ -314,7 +311,3 @@ export { createBabelInputPluginFactory, createBabelOutputPluginFactory };
 export default getBabelInputPlugin;
 // support `rollup -c —plugin babel`
 export { getBabelInputPlugin as babel };
-
-if (!isMainThread) {
-  startWorker();
-}

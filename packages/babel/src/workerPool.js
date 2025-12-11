@@ -44,11 +44,18 @@ class WorkerPool {
       console.error('Worker error:', error);
     });
 
+    worker.on('exit', (code) => {
+      if (code !== 0 && !this.isTerminating) {
+        console.error(`Worker stopped with exit code ${code}`);
+      }
+    });
+
     this.workers.push(worker);
     return worker;
   }
 
   getAvailableWorker() {
+    console.log('Get available worker');
     if (this.availableWorkers.length > 0) {
       return this.availableWorkers.shift();
     }
@@ -90,7 +97,6 @@ class WorkerPool {
   }
 
   async terminate() {
-    // Reject all pending tasks
     for (const [, { reject }] of this.runningTasks.entries()) {
       reject(new Error('Worker pool is terminating'));
     }
@@ -114,7 +120,7 @@ let pool = null;
 
 export function getWorkerPool() {
   if (!pool) {
-    const workerScript = import.meta.url.replace('file://', '');
+    const workerScript = new URL('./worker.js', import.meta.url).pathname;
     pool = new WorkerPool(workerScript);
   }
   return pool;
