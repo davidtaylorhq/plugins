@@ -1,11 +1,15 @@
+import { isMainThread } from 'worker_threads';
+
 import * as babel from '@babel/core';
 import { createFilter } from '@rollup/pluginutils';
 
 import { BUNDLED, HELPERS } from './constants.js';
 import bundledHelpersPlugin from './bundledHelpersPlugin.js';
 import preflightCheck from './preflightCheck.js';
-import transformCode from './transformCode.js';
+import transformCode, { transformParallel } from './transformCode.js';
 import { addBabelPlugin, escapeRegExpCharacters, warnOnce, stripQuery } from './utils.js';
+import { terminateWorkerPool } from './workerPool.js';
+import startWorker from './worker.js';
 
 const unpackOptions = ({
   extensions = babel.DEFAULT_EXTENSIONS,
@@ -101,6 +105,24 @@ const returnObject = () => {
   return {};
 };
 
+function isSerializable(value) {
+  if (value === null) {
+    return true;
+  } else if (Array.isArray(value)) {
+    return value.every(isSerializable);
+  }
+  switch (typeof value) {
+    case 'string':
+    case 'number':
+    case 'boolean':
+      return true;
+    case 'object':
+      return Object.keys(value).every((key) => isSerializable(value[key]));
+    default:
+      return false;
+  }
+}
+
 function createBabelInputPluginFactory(customCallback = returnObject) {
   const overrides = customCallback(babel);
 
@@ -114,6 +136,7 @@ function createBabelInputPluginFactory(customCallback = returnObject) {
     let babelOptions;
     let filter;
     let skipPreflightCheck;
+    let parallel;
     return {
       name: 'babel',
 
@@ -131,6 +154,7 @@ function createBabelInputPluginFactory(customCallback = returnObject) {
           include,
           filter: customFilter,
           skipPreflightCheck,
+          parallel,
           ...babelOptions
         } = unpackInputPluginOptions(pluginOptionsWithOverrides, this.meta.rollupVersion));
 
@@ -143,6 +167,13 @@ function createBabelInputPluginFactory(customCallback = returnObject) {
         const userDefinedFilter =
           typeof customFilter === 'function' ? customFilter : createFilter(include, exclude);
         filter = (id) => extensionRegExp.test(stripQuery(id).bareId) && userDefinedFilter(id);
+
+        if (parallel) {
+          if (!isSerializable(babelOptions)) {
+            throw new Error('When using "parallel" mode, all Babel options must be serializable.');
+          }
+          // TODO more checks
+        }
 
         return null;
       },
@@ -165,6 +196,10 @@ function createBabelInputPluginFactory(customCallback = returnObject) {
         if (!filter(filename)) return null;
         if (filename === HELPERS) return null;
 
+        if (parallel) {
+          return transformParallel(code, { ...babelOptions, filename });
+        }
+
         return transformCode(
           code,
           { ...babelOptions, filename },
@@ -181,6 +216,12 @@ function createBabelInputPluginFactory(customCallback = returnObject) {
               : transformOptions;
           }
         );
+      },
+
+      async buildEnd() {
+        if (parallel) {
+          await terminateWorkerPool();
+        }
       }
     };
   };
@@ -273,3 +314,7 @@ export { createBabelInputPluginFactory, createBabelOutputPluginFactory };
 export default getBabelInputPlugin;
 // support `rollup -c —plugin babel`
 export { getBabelInputPlugin as babel };
+
+if (!isMainThread) {
+  startWorker();
+}

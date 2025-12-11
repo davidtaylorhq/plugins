@@ -1,5 +1,7 @@
 import * as babel from '@babel/core';
 
+import { getWorkerPool } from './workerPool.js';
+
 export default async function transformCode(
   inputCode,
   babelOptions,
@@ -46,4 +48,9 @@ export default async function transformCode(
     code,
     map
   };
+}
+
+export async function transformParallel(inputCode, babelOptions) {
+  const pool = getWorkerPool();
+  return pool.runTask(inputCode, babelOptions);
 }
