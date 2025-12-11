@@ -2,11 +2,9 @@ import * as babel from '@babel/core';
 import { createFilter } from '@rollup/pluginutils';
 
 import { BUNDLED, HELPERS } from './constants.js';
-import bundledHelpersPlugin from './bundledHelpersPlugin.js';
-import preflightCheck from './preflightCheck.js';
-import transformCode, { transformParallel } from './transformCode.js';
-import { addBabelPlugin, escapeRegExpCharacters, warnOnce, stripQuery } from './utils.js';
-import { terminateWorkerPool } from './workerPool.js';
+import transformCode from './transformCode.js';
+import { escapeRegExpCharacters, warnOnce, stripQuery } from './utils.js';
+import WorkerPool from './workerPool.js';
 
 const unpackOptions = ({
   extensions = babel.DEFAULT_EXTENSIONS,
@@ -134,6 +132,7 @@ function createBabelInputPluginFactory(customCallback = returnObject) {
     let filter;
     let skipPreflightCheck;
     let parallel;
+    let workerPool;
     return {
       name: 'babel',
 
@@ -166,10 +165,14 @@ function createBabelInputPluginFactory(customCallback = returnObject) {
         filter = (id) => extensionRegExp.test(stripQuery(id).bareId) && userDefinedFilter(id);
 
         if (parallel) {
-          if (!isSerializable(babelOptions)) {
-            throw new Error('When using "parallel" mode, all Babel options must be serializable.');
+          const canParalllelize =
+            isSerializable(babelOptions) && !overrides?.config && !overrides?.result;
+          if (!canParalllelize) {
+            throw new Error(
+              'Cannot use "parallel" mode alongside custom overrides or non-serializable Babel options.'
+            );
           }
-          // TODO more checks
+          workerPool = new WorkerPool(new URL('./worker.js', import.meta.url).pathname);
         }
 
         return null;
@@ -194,30 +197,31 @@ function createBabelInputPluginFactory(customCallback = returnObject) {
         if (filename === HELPERS) return null;
 
         if (parallel) {
-          return transformParallel(code, { ...babelOptions, filename });
+          return workerPool.runTask({
+            inputCode: code,
+            babelOptions: { ...babelOptions, filename },
+            runPreflightCheck: !skipPreflightCheck,
+            babelHelpers
+          });
         }
 
-        return transformCode(
-          code,
-          { ...babelOptions, filename },
-          overrides,
+        return transformCode({
+          inputCode: code,
+          babelOptions: { ...babelOptions, filename },
+          overrides: {
+            config: overrides.config?.bind(this),
+            result: overrides.result?.bind(this)
+          },
           customOptions,
-          this,
-          async (transformOptions) => {
-            if (!skipPreflightCheck) {
-              await preflightCheck(this, babelHelpers, transformOptions);
-            }
-
-            return babelHelpers === BUNDLED
-              ? addBabelPlugin(transformOptions, bundledHelpersPlugin)
-              : transformOptions;
-          }
-        );
+          error: this.error.bind(this),
+          runPreflightCheck: !skipPreflightCheck,
+          babelHelpers
+        });
       },
 
       async buildEnd() {
         if (parallel) {
-          await terminateWorkerPool();
+          await workerPool.terminate();
         }
       }
     };
@@ -297,7 +301,16 @@ function createBabelOutputPluginFactory(customCallback = returnObject) {
           }
         }
 
-        return transformCode(code, babelOptions, overrides, customOptions, this);
+        return transformCode({
+          inputCode: code,
+          babelOptions,
+          overrides: {
+            config: overrides.config?.bind(this),
+            result: overrides.result?.bind(this)
+          },
+          customOptions,
+          error: this.error.bind(this)
+        });
       }
     };
   };

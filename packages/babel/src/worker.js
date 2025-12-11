@@ -2,9 +2,14 @@ import { parentPort } from 'worker_threads';
 
 import transformCode from './transformCode.js';
 
-parentPort.on('message', async ({ inputCode, babelOptions }) => {
+parentPort.on('message', async (opts) => {
   try {
-    const result = await transformCode(inputCode, babelOptions, {}, null, null, null);
+    const result = await transformCode({
+      ...opts,
+      error: (msg) => {
+        throw new Error(msg);
+      }
+    });
     parentPort.postMessage({
       result
     });

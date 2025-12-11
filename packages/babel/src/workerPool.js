@@ -2,7 +2,7 @@ import { Worker } from 'worker_threads';
 
 import os from 'os';
 
-class WorkerPool {
+export default class WorkerPool {
   workers = [];
   availableWorkers = [];
 
@@ -55,7 +55,6 @@ class WorkerPool {
   }
 
   getAvailableWorker() {
-    console.log('Get available worker');
     if (this.availableWorkers.length > 0) {
       return this.availableWorkers.shift();
     }
@@ -74,20 +73,16 @@ class WorkerPool {
 
       this.runningTasks.set(worker, task);
 
-      worker.postMessage({
-        inputCode: task.inputCode,
-        babelOptions: task.babelOptions
-      });
+      worker.postMessage(task.opts);
     }
   }
 
-  async runTask(inputCode, babelOptions) {
+  async runTask(opts) {
     const taskPromise = new Promise((resolve, reject) => {
       this.pendingTasks.push({
         resolve,
         reject,
-        inputCode,
-        babelOptions
+        opts
       });
     });
 
@@ -97,6 +92,7 @@ class WorkerPool {
   }
 
   async terminate() {
+    this.isTerminating = true;
     for (const [, { reject }] of this.runningTasks.entries()) {
       reject(new Error('Worker pool is terminating'));
     }
@@ -113,22 +109,5 @@ class WorkerPool {
 
     this.workers.length = 0;
     this.availableWorkers.length = 0;
-  }
-}
-
-let pool = null;
-
-export function getWorkerPool() {
-  if (!pool) {
-    const workerScript = new URL('./worker.js', import.meta.url).pathname;
-    pool = new WorkerPool(workerScript);
-  }
-  return pool;
-}
-
-export async function terminateWorkerPool() {
-  if (pool) {
-    await pool.terminate();
-    pool = null;
   }
 }
