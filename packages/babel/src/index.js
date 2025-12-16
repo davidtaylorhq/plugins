@@ -223,6 +223,13 @@ function createBabelInputPluginFactory(customCallback = returnObject) {
         if (parallel) {
           await workerPool.terminate();
         }
+      },
+
+      async renderChunk() {
+        // Hack - rolldown doesn't seem to fire the buildEnd hook. If we see renderChunk, then it's fine to terminate the workers
+        if (parallel) {
+          await workerPool.terminate();
+        }
       }
     };
   };
