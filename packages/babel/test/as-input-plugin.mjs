@@ -600,3 +600,13 @@ test('works as a CJS plugin', async (t) => {
 
   t.false(code.includes('const'));
 });
+
+test('works in parallel', async (t) => {
+  const bundle = await rollup({
+    input: `${FIXTURES}proposal-decorators/main.js`,
+    plugins: [babelPlugin({ parallel: true })]
+  });
+  const code = await getCode(bundle);
+
+  t.true(code.includes('_createClass'), 'decorator was applied');
+});
